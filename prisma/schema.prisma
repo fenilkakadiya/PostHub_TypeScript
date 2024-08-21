@@ -17,7 +17,10 @@ model User {
   userId    Int       @id @default(autoincrement())
   userName  String
   Email     String    @unique
+  uuid      String    @unique
+  number    String    @unique
   password  String
+  otp       String
   post      Post[]
   comment   Comment[]
   createdAt DateTime  @default(now())

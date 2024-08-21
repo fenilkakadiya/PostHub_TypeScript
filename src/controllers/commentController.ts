@@ -10,7 +10,6 @@ declare global {
   }
 }
 
-
 export const addComment = async (req: Request, res: Response) => {
   const { postId, comment } = req.body;
   const userId = req.user?.userId
@@ -49,7 +48,6 @@ export const addComment = async (req: Request, res: Response) => {
     return res.status(500).json({ message: 'Failed to add comment' });
   }
 };
-
 
 
 export const editComment = async (req: Request, res: Response) => {

@@ -2,79 +2,154 @@ import { Request, Response } from 'express';
 import { prismaClient } from '..';
 import { hashSync,compareSync } from "bcrypt";
 import * as jwt from "jsonwebtoken";
-import nodemailer from 'nodemailer'
-import { JWT_SECRET } from '../secret';
+import nodemailer from 'nodemailer';
+import { v4 as uuidv4 } from  'uuid';
+import { EMAIL, JWT_SECRET, PASS} from '../secret';
+import crypto from 'crypto';
 
+export const signup = async (req: Request, res: Response) => {
+  const { userName, Email, password, number } = req.body;
 
-export const  signup = async (req:Request,res:Response)=>{
-    const { userName , Email, password } = req.body;
+  if (!userName || !Email || !password || !number) {
+    return res.status(400).json({
+      message: 'Username, email, password, and number are compulsory',
+    });
+  }
 
-    if (!userName || !Email || !password) {
-        return res.json({
-          message: 'Username, email, and password are compulsory',
-        });
-      }
-    
-      if (!Email.includes('@')) {
-        return res.json({ message: "Email must contain '@' symbol" });
-      }
-    
-      if (
-        !(
-          /[A-Z]/.test(password) &&
-          /[!@#$%^&*(),.?":{}|<>]/.test(password) &&
-          password.length >= 6
-        )
-      ) {
-        return res.json({
-          message:
-            'Password must contain at least one uppercase letter, one special char, and must have 6 characters',
-        });
-      }
+  if (!Email.includes('@')) {
+    return res.status(400).json({ message: "Email must contain '@' symbol" });
+  }
 
-      let user = await prismaClient.user.findFirst({where : {Email}})
-      if(user){
-        res.json({message :'user already exists'});
-      }
-      user = await prismaClient.user.create({
-        data:{
-          userName,
-          Email,
-          password: hashSync(password, 10)
-        }
-      });
+  if (
+    !(
+      /[A-Z]/.test(password) &&
+      /[!@#$%^&*(),.?":{}|<>]/.test(password) &&
+      password.length >= 6
+    )
+  ) {
+    return res.status(400).json({
+      message:
+        'Password must contain at least one uppercase letter, one special character, and must have at least 6 characters',
+    });
+  }
 
-       return res.json(user);
-}
+  let user = await prismaClient.user.findFirst({ where: { Email } });
+  if (user) {
+    return res.status(409).json({ message: 'User already exists' });
+  }
 
+  try {
+    user = await prismaClient.user.create({
+      data: {
+        uuid: uuidv4(),
+        userName,
+        Email,
+        number,
+        password: hashSync(password, 10),
+        otp:'null'
+      },
+    });
+
+    return res.status(201).json(user);
+  } catch (error) {
+    return res.status(500).json({ message: 'Error creating user', error });
+  }
+};
 
 export const  login = async (req:Request,res:Response)=>{
-  const { Email, password } = req.body;
+  const { Email, password ,number } = req.body;
 
-  if (!Email || !password) {
+  if (!Email || !password || !number) {
       return res.json({
-        message: 'email, and password are compulsory',
+        message: 'email,number and password are compulsory',
       });
     }
 
-    let user = await prismaClient.user.findFirst({where : {Email}})
+    let user = await prismaClient.user.findFirst({where : {number}})
     if(!user){
-      return res.json({message :'email does not exists'});
+      return res.json({message :'number does not exists'});
     }
     if(!compareSync(password ,user.password)){
        return res.json({message :'incorrect password'})
     }
     const token = jwt.sign({
-      userId :user.userId
+      userId :user.userId,
+      number: user.number,
     },JWT_SECRET,{ expiresIn: '1h' });
 
     res.cookie("token", token, {
       httpOnly: true,
       maxAge: 6 * 60 * 60 * 1000,
     });
-
-     return res.json({user,token});
+     return res.json({message : 'login success'});
 }
+
+export const generateOtp = async (req: Request, res: Response) => {
+  const token = req.cookies.token
+
+  if (!token) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  try {
+    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const number = decoded.number;
+
+    const user = await prismaClient.user.findFirst({ where: { number } });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User with this number does not exist' });
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+
+    await prismaClient.user.update({
+      where: { number },
+      data: { otp },
+    });
+
+    console.log(`Generated OTP for ${number}: ${otp}`);
+    res.json({ message: 'OTP sent' });
+
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid or expired token' });
+  }
+};
+
+export const verifyOtp = async (req: Request, res: Response) => {
+  const { otp } = req.body;
+  const token = req.cookies.token
+
+  if (!otp) {
+    return res.status(400).json({ message: 'OTP is required' });
+  }
+
+  if (!token) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  try {
+    const decoded: any = jwt.verify(token, JWT_SECRET);
+    const number = decoded.number;
+
+    const user = await prismaClient.user.findFirst({ where: { number, otp } });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid OTP or number' });
+    }
+
+    const newOtp = crypto.randomInt(100000, 999999).toString();
+
+    await prismaClient.user.update({
+      where: { number },
+      data: { otp: newOtp },
+    });
+
+    return res.json({ message: 'OTP verified successfully' });
+  } catch (error) {
+    return res.status(401).json({ message: 'Invalid or expired token' });
+  }
+};
 
 export const logout = (req: Request, res: Response) => {
   res.clearCookie('token');
@@ -137,12 +212,11 @@ export const changePassword = async (req: Request, res: Response) => {
   }
 };
 
-
 const transporter = nodemailer.createTransport({
-  service: 'Gmail', // You can use other services like 'SendGrid', 'Mailgun', etc.
+  service: 'Gmail', 
   auth: {
-    user: 'fenilkakadiya7777@gmail.com',
-    pass: 'rkue vcak sned qjxv',
+    user: EMAIL,
+    pass: PASS,
   },
 });
 
@@ -159,7 +233,6 @@ export const sendPasswordResetEmail = async (email: string, token: string) => {
 
   return transporter.sendMail(mailOptions);
 };
-
 
 export const requestPasswordReset = async (req: Request, res: Response) => {
   const { email } = req.body;
@@ -194,7 +267,7 @@ export const resetPassword = async (req: Request, res: Response) => {
   }
 
   if (newPassword !== confirmNewPassword) {
-    return res.status(400).json({ message: 'New passwords do not match' });
+    return res.status(400).json({ message: 'New passwords does not match' });
   }
 
   if (
@@ -230,11 +303,4 @@ export const resetPassword = async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Invalid or expired token' });
   }
 };
-
-
-
-
-
-
-
 
